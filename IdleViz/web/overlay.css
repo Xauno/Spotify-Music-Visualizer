@@ -83,10 +83,19 @@ body {
   opacity: calc(1 - var(--viz-brightness));
 }
 
-/* Fixed 1920×1080 stage, scaled by overlay.js to the window width and pinned to the bottom,
-   where all of the overlay sits, so the layout matches the TV on any display. */
-#stage {
+/* One display's part of the window: all of it, unless the Windows app spans several displays
+   with one window. overlay.js then places one region over each display. */
+.region {
   position: fixed;
+  inset: 0;
+  overflow: hidden;
+  --region-width: 100vw;
+}
+
+/* Fixed 1920×1080 stage, scaled by overlay.js to the region's width and pinned to its bottom,
+   where all of the overlay sits, so the layout matches the TV on any display. */
+.stage {
+  position: absolute;
   left: 0;
   bottom: 0;
   width: 1920px;
@@ -96,12 +105,12 @@ body {
   color: #fff;
   transition: opacity var(--fade) ease;
 }
-#stage.hidden {
+.stage.hidden {
   opacity: 0;
 }
 
 /* Keeps white text readable over a bright visualizer. */
-#scrim {
+.scrim {
   position: absolute;
   inset: 0;
   background: linear-gradient(to top, rgb(0 0 0 / 55%) 0, rgb(0 0 0 / 25%) 35%, transparent 60%);
@@ -184,7 +193,7 @@ body {
   text-overflow: ellipsis;
 }
 
-#ad-label {
+.ad-label {
   position: absolute;
   left: 136px;
   top: 820px;
@@ -195,7 +204,7 @@ body {
 }
 
 /* Sits lower than on the TV, taking the space of the playback controls this overlay leaves out. */
-#progress {
+.progress {
   position: absolute;
   left: 136px;
   right: 136px;
@@ -213,17 +222,17 @@ body {
   font-variant-numeric: tabular-nums;
   color: rgb(255 255 255 / 85%);
 }
-#duration {
+.duration {
   text-align: right;
 }
-#bar {
+.bar {
   flex: 1;
   height: 4px;
   border-radius: 2px;
   background: rgb(255 255 255 / 30%);
   overflow: hidden;
 }
-#played {
+.played {
   height: 100%;
   background: #fff;
   transform-origin: left;
@@ -231,11 +240,11 @@ body {
 }
 
 /* Paused: everything but the progress row fades out; the row stays exactly where it is. */
-#stage.progress-only .track,
-#stage.ad .track {
+.stage.progress-only .track,
+.stage.ad .track {
   opacity: 0;
 }
-#stage.ad #ad-label {
+.stage.ad .ad-label {
   opacity: 1;
 }
 
@@ -264,12 +273,12 @@ body {
   stroke-linejoin: round;
 }
 /* Where the heart goes when the track block isn't showing. Sized like the one beside the title. */
-#like-corner {
-  position: fixed;
-  top: 4vw;
-  right: 4vw;
-  width: 3.125vw;
-  height: 3.125vw;
+.like-corner {
+  position: absolute;
+  top: calc(var(--region-width) * 0.04);
+  right: calc(var(--region-width) * 0.04);
+  width: calc(var(--region-width) * 0.03125);
+  height: calc(var(--region-width) * 0.03125);
 }
 @keyframes like-pop {
   0% {

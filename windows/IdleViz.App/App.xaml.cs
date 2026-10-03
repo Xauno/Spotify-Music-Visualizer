@@ -80,7 +80,8 @@ public partial class App : Application
 #endif
 
         // Created now and kept hidden, so the first open is instant.
-        _visualizer = new VisualizerController(_dispatcher, dismissEnabled: !debug.NoDismiss);
+        _visualizer = new VisualizerController(
+            _dispatcher, dismissEnabled: !debug.NoDismiss, () => DisplayPlan.For(MultiDisplaySettings.Read(_settings), Displays.Current()));
 
         _hotkeyWindow = new HotkeyWindow();
         _hotkeyWindow.HotkeyPressed += () => OpenVisualizer(TriggerSource.Hotkey);
@@ -136,6 +137,7 @@ public partial class App : Application
         var presets = _presets;
         _visualizer.Keys = () => VisualizerKeys.Read(_settings);
         _visualizer.KeyPressed += presets.Perform;
+        _visualizer.MirrorHung += presets.Library.MarkHung;
         page.SendBrightness(BrightnessSetting.Value(_settings));
         page.SendOverlayEnabled(OverlaySetting.Value(_settings));
         _visualizer.Opened += _audio.Start;
@@ -175,6 +177,11 @@ public partial class App : Application
             else if (e.Key == OverlaySetting.Key)
             {
                 page.SendOverlayEnabled(OverlaySetting.Value(_settings));
+            }
+            else if (MultiDisplaySettings.IsKey(e.Key))
+            {
+                // Windows for other displays are made now, so the next open finds their pages loaded.
+                visualizer.Prepare();
             }
         };
         power.Changed += () =>
@@ -254,6 +261,7 @@ public partial class App : Application
             {
                 Log.Info("display", $"The displays changed: {Displays.Describe(displays.Layout)}");
                 visualizer.Close(CloseReason.DisplayChanged);
+                visualizer.Prepare();
             }
         };
     }

@@ -662,3 +662,63 @@ The last step: the remaining settings rows and the two keys that work while the 
 | Another key (A) | "Closed by key 0x41" |
 
 **Not tried:** the heart on screen (it shows for 1.6 s; the script only saw the log and the settings file), a real sign-in with the row on, the installed copy's uninstaller removing the entry, and a key held across the opening.
+
+### W9: more than one display
+
+Not a step of the brief: the owner asked for it after W8c. The Mac app still uses one display.
+
+| File | What it does |
+| ---- | ------------ |
+| `IdleViz.Core/MultiDisplay.cs` | `MultiDisplaySettings` (the six stored values), `DisplayPlan.For(settings, displays)`: which windows to show, where, which displays each covers, where the overlay goes and whether input closes it. `DisplayLabel` names displays in settings. |
+| `IdleViz.Core/PresetSettings.cs` | `FollowScript(preset)`: the preset controls held on one preset, for a page that follows the main page. |
+| `IdleViz.App/VisualizerController.cs` | Keeps one window and page per mirrored display (`Prepare`), shows, fades and hides them together, and remakes the other pages when one ended every renderer. |
+| `IdleViz.App/PageView.cs` | A main page forwards what it is sent to its mirrors, keeps them on its preset (`SyncMirrors`), and sends each window's layout (`SendLayout`). |
+| `IdleViz.App/VisualizerWindow.cs` | `Show(PlannedWindow)` instead of always the primary display. |
+| `IdleViz/web/overlay.js`, `overlay-state.js`, `overlay.css`, `index.html` | The overlay lives in a `.region`, one per display the window covers; `setOverlayRegions` places them. The overlay's elements are found by class, not id, so a region can be copied. |
+| `IdleViz/web/visualizer.js`, `visualizer-state.js` | `setRenderWidthCap` raises the 2560 px render cap for a window that spans displays. |
+| `SettingsWindow.xaml` | A **Displays** section with the six rows and the GPU warning. |
+
+**Settings** (stored with these keys; displays are stored by the name Windows gives them, such as `\\.\DISPLAY2`):
+
+| Row | Key | Default |
+| --- | --- | --- |
+| Main display | `mainDisplay` | not set: the display Windows calls primary |
+| Use more than one display | `multiDisplay` | off |
+| Other displays | `multiDisplayOthers` | not set: every other display, including ones plugged in later |
+| Placement | `multiDisplayPlacement` (`mirror` or `extend`) | `mirror` |
+| Close on input | `multiDisplayCloseOnInput` | on |
+| Spotify overlay on | `overlayDisplay` (`main`, `all` or a display's name) | `main` |
+
+A stored display that isn't connected falls back: the main display to the primary one, the overlay to the main display. The same goes for an overlay display that isn't covered. With the switch off only the main display is covered, the overlay is on it, and input always closes the visualizer.
+
+**Same on each display** (the owner chose a render per display over copies of one picture). Each further display gets its own window and its own page, made ahead of time and kept hidden like the main one, so opening stays instant. The main page is the only one that picks presets. The others are sent the same preset controls but in Single mode, held on the preset the main page shows; the app asks the main page for its preset every 250 ms while open and passes a change on, and the following page blends to it with the blend time. So the same preset runs on every display, up to a quarter of a second apart, but the pictures are not identical: Milkdrop presets use random numbers, and each page has its own. Audio frames, the Spotify item, the delay, brightness and the overlay switch go to every page. Only the main page reports the preset list, failures and the last shown preset.
+
+**Extend across displays** (the owner chose a true span, cropped). The main window covers the rectangle that encloses the covered displays, with the one page in it. Displays of different sizes or offsets leave parts of that rectangle that no display shows; that part of the picture is lost. The page is told the render width cap, 2560 px times the span's width over the main display's width (at most 7680), so the main display's part is as sharp as when it is covered alone (the owner's choice). On the owner's desk: a 5360 px span, cap 3989.
+
+**The overlay** is laid out per display. The app sends the window's size and each display's rectangle inside it, in device pixels, with a flag for whether the overlay shows there; the page scales by its own width, so the scale of the display doesn't matter. Each region clips its own overlay, has its own heart for the like key, and scales its 1920 px stage to that display's width. A window that covers one display, and the Mac app, which never sends a layout, have one region: the whole window.
+
+**Close on input off** (the owner chose "nothing closes it" and "like and skip keys off"). No hooks are installed, so nothing is swallowed and the like and skip keys type as usual; the window doesn't take focus and the pointer stays visible. A second manual trigger (hotkey, tray menu, URL, **Open now**) closes it, as does the keep-awake limit, sleep or a display change. It only counts while **Use more than one display** is on (the owner's choice).
+
+**A stuck page with mirrors.** Replacing a stuck page ends every renderer in the WebView2 environment, which now includes the other displays' pages. The page that did it tells the controller before anything is awaited, and the other pages drop their web views and make new ones, with their watchdogs started over. WebView2's later reports about the ended renderers then refer to web views nobody holds, and are ignored.
+
+**Chosen here without asking the owner:**
+
+- The section is called **Displays** and sits between Visualizer and Presets; the placement choices are worded "Same on each display" and "Extend across displays"; the default placement is the first.
+- The warning is an InfoBar at the top of the section, shown only while the switch is on: "Using more than one display takes more GPU power. The visualizer may run less smoothly, at a lower frame rate."
+- Displays are named by their Windows number and size ("Display 2 (3440 × 1440)"), not by the monitor's model name.
+- Display settings changed while the visualizer is open apply at the next open. A display change still closes it at once, as before.
+- A following page blends with the blend time even after the skip key, which blends the main page in half a second.
+
+**Seen when checking** (Debug build on the owner's PC: a 3440 × 1440 primary display, `DISPLAY2`, and a 1920 × 1080 one to its left, `DISPLAY1`; settings written to the file or driven through UI Automation; windows captured from the screen):
+
+| Case | Result |
+| --- | --- |
+| Switch on, mirror, overlay on all | Two windows, 3440 × 1440 at 0,0 and 1920 × 1080 at −1920,357; both pages logged the same preset; each showed the progress row at its own bottom edge |
+| Extend, overlay on all | One window, 5360 × 1440 at −1920,0; one picture across both; a progress row on each display's part, the small display's at its own bottom edge |
+| Main display `DISPLAY2`, overlay on `DISPLAY1` | The progress row only on the 1920 × 1080 display |
+| Close on input off, mouse moved | "Opened … input is ignored"; still open after the moves; a second `idleviz://open` closed it |
+| Close on input on, two displays, mouse moved | "Closed by mouse move"; both windows gone |
+| `--hang-page` with two displays mirrored | The main page was replaced after 2 s, "Ended 2 renderer process(es)", both pages Ready again 0.6 s later on the same new preset, both windows still up |
+| Settings window | The Displays section; with the switch off the four rows below it are greyed out and there is no warning; switched on through UI Automation, the warning showed and `multiDisplay` true was stored |
+
+**Not tried:** the pickers and the Other displays menu by hand (only the switch was driven), three or more displays, displays at different scales, a display unplugged while several are covered, the like heart on a second display, the installed Release copy, and how much the frame rate actually drops (nothing measured it).

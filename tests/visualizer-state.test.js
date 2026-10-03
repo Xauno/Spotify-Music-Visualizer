@@ -6,6 +6,7 @@ import {
   DEFAULT_SETTINGS,
   FailureLog,
   MAX_RENDER_WIDTH,
+  MAX_SPAN_RENDER_WIDTH,
   Rotation,
   ShuffleBag,
   collectPresets,
@@ -14,6 +15,7 @@ import {
   parseCustomPresets,
   parsePresetSettings,
   renderSize,
+  renderWidthCap,
   shouldRender,
   shufflePool,
   skipBlendSeconds,
@@ -404,6 +406,22 @@ describe("renderSize", () => {
   it("never returns an empty size", () => {
     expect(renderSize(0, 0, 2)).toEqual({ width: 2, height: 2 });
     expect(renderSize(100, 50, 0)).toEqual({ width: 100, height: 50 });
+  });
+});
+
+describe("renderWidthCap", () => {
+  it("is the normal cap unless the app asks for more", () => {
+    expect(renderWidthCap(undefined)).toBe(MAX_RENDER_WIDTH);
+    expect(renderWidthCap("4000")).toBe(MAX_RENDER_WIDTH);
+    expect(renderWidthCap(Number.NaN)).toBe(MAX_RENDER_WIDTH);
+    expect(renderWidthCap(800)).toBe(MAX_RENDER_WIDTH);
+  });
+
+  it("follows the app's cap for a span, up to a limit", () => {
+    expect(renderWidthCap(3988.8)).toBe(3989);
+    expect(renderWidthCap(100_000)).toBe(MAX_SPAN_RENDER_WIDTH);
+    // A 5360 px span of a 3440 px and a 1920 px display: the wide display's part is still 2560 px.
+    expect(renderSize(5360, 1440, 1, renderWidthCap(3989))).toEqual({ width: 3989, height: 1072 });
   });
 });
 

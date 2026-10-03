@@ -119,3 +119,48 @@ export function clampBrightness(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_BRIGHTNESS;
   return Math.min(Math.max(value, 0.5), 1);
 }
+
+/** The overlay is laid out on a stage this wide and scaled to the display. */
+export const STAGE_WIDTH = 1920;
+const MAX_REGIONS = 16;
+
+/**
+ * One display's part of the window.
+ * @typedef {object} Region
+ * @property {number} left
+ * @property {number} top
+ * @property {number} width
+ * @property {number} height
+ * @property {boolean} overlay  Whether the Spotify overlay shows on this display.
+ */
+
+/**
+ * Where the displays are inside the window, in CSS pixels. A window that covers one display, as
+ * on the Mac, never gets a layout: it is one region, the whole window, with the overlay.
+ * The app sends the layout in device pixels, with the size of the whole window to scale by.
+ * @param {unknown} value        A `setOverlayRegions` payload.
+ * @param {number} innerWidth    The window's size in CSS pixels.
+ * @param {number} innerHeight
+ * @returns {Region[]}
+ */
+export function overlayRegions(value, innerWidth, innerHeight) {
+  const whole = [{ left: 0, top: 0, width: innerWidth, height: innerHeight, overlay: true }];
+  const layout = /** @type {Record<string, unknown>} */ (value && typeof value === "object" ? value : {});
+  const width = Number(layout.width);
+  if (!Number.isFinite(width) || width <= 0 || !Array.isArray(layout.regions)) return whole;
+  const scale = innerWidth / width;
+  const regions = [];
+  for (const raw of layout.regions.slice(0, MAX_REGIONS)) {
+    if (!raw || typeof raw !== "object") continue;
+    const box = [raw.x, raw.y, raw.width, raw.height].map(Number);
+    if (!box.every(Number.isFinite) || box[2] <= 0 || box[3] <= 0) continue;
+    regions.push({
+      left: box[0] * scale,
+      top: box[1] * scale,
+      width: box[2] * scale,
+      height: box[3] * scale,
+      overlay: raw.overlay === true,
+    });
+  }
+  return regions.length > 0 ? regions : whole;
+}

@@ -5,6 +5,7 @@ import {
   fraction,
   layoutFor,
   likePlacement,
+  overlayRegions,
   parseNowPlaying,
   positionAt,
 } from "../IdleViz/web/overlay-state.js";
@@ -160,5 +161,45 @@ describe("parseNowPlaying", () => {
     expect(parseNowPlaying({ ...song, artwork: "data:image/png;base64,AA", artworkPending: true }).artworkPending).toBe(
       false,
     );
+  });
+});
+
+describe("overlayRegions", () => {
+  const whole = [{ left: 0, top: 0, width: 1720, height: 720, overlay: true }];
+
+  it("is the whole window, with the overlay, until the app sends a layout", () => {
+    expect(overlayRegions(null, 1720, 720)).toEqual(whole);
+    expect(overlayRegions("nonsense", 1720, 720)).toEqual(whole);
+    expect(overlayRegions({ width: 0, regions: [] }, 1720, 720)).toEqual(whole);
+    expect(overlayRegions({ width: 3440, regions: [] }, 1720, 720)).toEqual(whole);
+  });
+
+  it("scales device pixels to CSS pixels by the window's width", () => {
+    // A 1920 x 1080 display left of a 3440 x 1440 one, in a window at 200 %.
+    const layout = {
+      width: 5360,
+      height: 1440,
+      regions: [
+        { x: 1920, y: 0, width: 3440, height: 1440, overlay: true },
+        { x: 0, y: 360, width: 1920, height: 1080, overlay: false },
+      ],
+    };
+    expect(overlayRegions(layout, 2680, 720)).toEqual([
+      { left: 960, top: 0, width: 1720, height: 720, overlay: true },
+      { left: 0, top: 180, width: 960, height: 540, overlay: false },
+    ]);
+  });
+
+  it("drops regions that have no size or aren't numbers", () => {
+    const layout = {
+      width: 1000,
+      regions: [
+        null,
+        { x: 0, y: 0, width: 0, height: 10 },
+        { x: "a", y: 0, width: 5, height: 5 },
+        { x: 0, y: 0, width: 500, height: 500 },
+      ],
+    };
+    expect(overlayRegions(layout, 1000, 500)).toEqual([{ left: 0, top: 0, width: 500, height: 500, overlay: false }]);
   });
 });

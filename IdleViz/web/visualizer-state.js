@@ -2,6 +2,8 @@
 
 /** Butterchurn renders at most this wide; the GPU scales it up on larger displays. */
 export const MAX_RENDER_WIDTH = 2560;
+/** The widest the app may ask for, when one window spans several displays. */
+export const MAX_SPAN_RENDER_WIDTH = 7680;
 /** Frames closer together than this are skipped, which halves 120 Hz to 60 fps. A strict
  *  16.7 ms would also drop about a third of the frames on a 60 Hz display (timestamp jitter). */
 export const MIN_FRAME_GAP_MS = 12;
@@ -318,6 +320,16 @@ export function renderSize(cssWidth, cssHeight, devicePixelRatio, maxWidth = MAX
   const height = Math.max(cssHeight, 1);
   const scale = Math.min(devicePixelRatio > 0 ? devicePixelRatio : 1, maxWidth / width);
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+}
+
+/**
+ * The render width cap the app asks for when the window spans several displays, so the main
+ * display's part stays as sharp as it is alone. Anything unusable is the normal cap.
+ * @param {unknown} value
+ */
+export function renderWidthCap(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return MAX_RENDER_WIDTH;
+  return Math.round(Math.min(Math.max(value, MAX_RENDER_WIDTH), MAX_SPAN_RENDER_WIDTH));
 }
 
 /**

@@ -17,14 +17,17 @@
     <!-- Bottom to top: visualizer, dim layer, overlay. -->
     <div id="viz"></div>
     <div id="dim"></div>
-    <div id="stage" class="hidden">
-      <div id="scrim"></div>
-      <div id="tracks"></div>
-      <div id="ad-label">Advertisement</div>
-      <div id="progress">
-        <span id="elapsed" class="time"></span>
-        <div id="bar"><div id="played"></div></div>
-        <span id="duration" class="time"></span>
+    <!-- One region per display the window covers. overlay.js copies this one for the others. -->
+    <div class="region">
+      <div class="stage hidden">
+        <div class="scrim"></div>
+        <div class="tracks"></div>
+        <div class="ad-label">Advertisement</div>
+        <div class="progress">
+          <span class="elapsed time"></span>
+          <div class="bar"><div class="played"></div></div>
+          <span class="duration time"></span>
+        </div>
       </div>
     </div>
   </body>

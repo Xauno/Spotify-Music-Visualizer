@@ -66,12 +66,16 @@ public sealed partial class SettingsWindow : Window
 
         ShowKeys();
         ShowDisplayOptions();
-        // Read again whenever the window comes forward: the entry can be switched off in Windows too.
+        MultiDisplayWarning.Message = MultiDisplaySettings.GpuWarning;
+        ShowDisplays();
+        // Read again whenever the window comes forward: the entry can be switched off in Windows too,
+        // and a display may have been plugged in.
         Activated += (_, e) =>
         {
             if (e.WindowActivationState != WindowActivationState.Deactivated)
             {
                 ShowStartup();
+                ShowDisplays();
             }
         };
         ShowStartup();
@@ -379,6 +383,149 @@ public sealed partial class SettingsWindow : Window
     }
 
     private void OnOpenNowClick(object sender, RoutedEventArgs e) => _app.OpenVisualizer(TriggerSource.Settings);
+
+    /// <summary>Fills the Displays rows in from the settings and the displays connected right now.</summary>
+    private void ShowDisplays()
+    {
+        var settings = MultiDisplaySettings.Read(_app.Settings);
+        var displays = Displays.Current();
+        var connected = displays.Select(display => (display.Name, DisplayLabel.For(display))).ToList();
+
+        // A stored display that is unplugged right now stays in the list, so the choice isn't lost.
+        IEnumerable<(string, string)> Missing(string? name) =>
+            name is null || displays.Any(display => display.Name == name) ? [] : [(name, $"{DisplayLabel.Brief(name)} (not connected)")];
+
+        var overlayIsDisplay = settings.OverlayDisplay is not (MultiDisplaySettings.OverlayOnMain or MultiDisplaySettings.OverlayOnAll);
+        _showing = true;
+        try
+        {
+            Fill(MainDisplayPicker, [(string.Empty, "Windows primary"), .. connected, .. Missing(settings.MainDisplay)], settings.MainDisplay ?? string.Empty);
+            MultiDisplaySwitch.IsOn = settings.Enabled;
+            Fill(
+                PlacementPicker,
+                [
+                    (MultiDisplaySettings.PlacementName(DisplayPlacement.Mirror), "Same on each display"),
+                    (MultiDisplaySettings.PlacementName(DisplayPlacement.Extend), "Extend across displays"),
+                ],
+                MultiDisplaySettings.PlacementName(settings.Placement));
+            CloseOnInputSwitch.IsOn = settings.CloseOnInput;
+            Fill(
+                OverlayDisplayPicker,
+                [
+                    (MultiDisplaySettings.OverlayOnMain, "Main display"),
+                    .. connected,
+                    .. Missing(overlayIsDisplay ? settings.OverlayDisplay : null),
+                    (MultiDisplaySettings.OverlayOnAll, "All displays"),
+                ],
+                settings.OverlayDisplay);
+        }
+        finally
+        {
+            _showing = false;
+        }
+
+        // Every display but the main one, each with a tick.
+        var others = displays.Count == 0 ? [] : displays.Where(display => display != settings.Main(displays)).ToList();
+        OtherDisplaysMenu.Items.Clear();
+        foreach (var display in others)
+        {
+            var item = new ToggleMenuFlyoutItem { Text = DisplayLabel.For(display), Tag = display.Name, IsChecked = settings.Covers(display) };
+            item.Click += OnOtherDisplayClick;
+            OtherDisplaysMenu.Items.Add(item);
+        }
+
+        var chosen = others.Count(settings.Covers);
+        OtherDisplaysButton.Content = others.Count == 0 ? "None connected" : chosen == others.Count ? "All" : chosen == 0 ? "None" : $"{chosen} of {others.Count}";
+
+        MultiDisplayWarning.IsOpen = settings.Enabled;
+        PlacementCard.IsEnabled = CloseOnInputCard.IsEnabled = OverlayDisplayCard.IsEnabled = settings.Enabled;
+        OtherDisplaysCard.IsEnabled = settings.Enabled && others.Count > 0;
+    }
+
+    // A picker keeps its items unless they changed: emptying one from inside its own selection event takes the app down.
+    private static void Fill(ComboBox picker, IReadOnlyList<(string Tag, string Label)> choices, string selected)
+    {
+        var shown = picker.Items.OfType<ComboBoxItem>().Select(item => ((string)item.Tag, (string)item.Content));
+        if (!choices.SequenceEqual(shown))
+        {
+            picker.Items.Clear();
+            foreach (var (tag, label) in choices)
+            {
+                picker.Items.Add(new ComboBoxItem { Content = label, Tag = tag });
+            }
+        }
+
+        Select(picker, selected);
+    }
+
+    private void OnMainDisplayChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_showing || MainDisplayPicker.SelectedItem is not ComboBoxItem { Tag: string name })
+        {
+            return;
+        }
+
+        if (name.Length == 0)
+        {
+            _app.Settings.Remove(MultiDisplaySettings.MainDisplayKey);
+        }
+        else
+        {
+            _app.Settings.SetString(MultiDisplaySettings.MainDisplayKey, name);
+        }
+
+        ShowDisplays();
+    }
+
+    private void OnMultiDisplayToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_showing)
+        {
+            _app.Settings.SetBool(MultiDisplaySettings.EnabledKey, MultiDisplaySwitch.IsOn);
+            ShowDisplays();
+        }
+    }
+
+    private void OnOtherDisplayClick(object sender, RoutedEventArgs e)
+    {
+        var items = OtherDisplaysMenu.Items.OfType<ToggleMenuFlyoutItem>().ToList();
+        if (items.All(item => item.IsChecked))
+        {
+            // All of them, including a display that is plugged in later.
+            _app.Settings.Remove(MultiDisplaySettings.OtherDisplaysKey);
+        }
+        else
+        {
+            _app.Settings.SetStringList(MultiDisplaySettings.OtherDisplaysKey, items.Where(item => item.IsChecked).Select(item => (string)item.Tag));
+        }
+
+        // Not from inside the menu's own click: the menu is rebuilt.
+        DispatcherQueue.TryEnqueue(ShowDisplays);
+    }
+
+    private void OnPlacementChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_showing && PlacementPicker.SelectedItem is ComboBoxItem { Tag: string placement })
+        {
+            _app.Settings.SetString(MultiDisplaySettings.PlacementKey, placement);
+        }
+    }
+
+    private void OnCloseOnInputToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_showing)
+        {
+            _app.Settings.SetBool(MultiDisplaySettings.CloseOnInputKey, CloseOnInputSwitch.IsOn);
+        }
+    }
+
+    private void OnOverlayDisplayChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_showing && OverlayDisplayPicker.SelectedItem is ComboBoxItem { Tag: string display })
+        {
+            _app.Settings.SetString(MultiDisplaySettings.OverlayDisplayKey, display);
+        }
+    }
 
     /// <summary>Fills the audio delay rows in. Runs again on every change: the slider, Detect delay, the test, another device.</summary>
     private void ShowDelay()

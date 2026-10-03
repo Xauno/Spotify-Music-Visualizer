@@ -1,13 +1,13 @@
+using IdleViz.Core;
 using Windows.Win32;
 using Windows.Win32.Foundation;
-using Windows.Win32.Graphics.Gdi;
 using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace IdleViz.App;
 
 /// <summary>
-/// The borderless black window that covers the primary display, above everything including the
-/// taskbar. It is created once at launch and hidden between opens, so opening is instant.
+/// A borderless black window that covers a display (or, extended, several), above everything
+/// including the taskbar. It is created ahead of time and hidden between opens, so opening is instant.
 /// </summary>
 internal sealed class VisualizerWindow() : NativeWindow(
     "IdleViz visualizer",
@@ -45,17 +45,16 @@ internal sealed class VisualizerWindow() : NativeWindow(
         return true;
     }
 
-    /// <summary>Shows the window over the primary display, on top, without taking focus.</summary>
-    public void Show()
+    /// <summary>Shows the window where the plan puts it, on top, without taking focus.</summary>
+    public void Show(PlannedWindow place)
     {
-        var bounds = PrimaryDisplayBounds();
         PInvoke.SetWindowPos(
             Handle,
             new HWND(-1), // HWND_TOPMOST
-            bounds.left,
-            bounds.top,
-            bounds.right - bounds.left,
-            bounds.bottom - bounds.top,
+            place.Left,
+            place.Top,
+            place.Width,
+            place.Height,
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_SHOWWINDOW);
     }
 
@@ -88,13 +87,5 @@ internal sealed class VisualizerWindow() : NativeWindow(
         }
 
         return null;
-    }
-
-    private static RECT PrimaryDisplayBounds()
-    {
-        var monitor = PInvoke.MonitorFromPoint(default, MONITOR_FROM_FLAGS.MONITOR_DEFAULTTOPRIMARY);
-        var info = new MONITORINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };
-        PInvoke.GetMonitorInfo(monitor, ref info);
-        return info.rcMonitor;
     }
 }

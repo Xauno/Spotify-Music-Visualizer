@@ -8,7 +8,9 @@ using Windows.Win32.Foundation;
 namespace IdleViz.App;
 
 /// <summary>
-/// The one web page (visualizer, dim layer and overlay) in WebView2, on the visualizer window. The
+/// The web page (visualizer, dim layer and overlay) in WebView2, on a visualizer window. There is
+/// one main page; with more than one display mirrored, each further window has a page of its own
+/// that is sent everything the main page is sent and is held on the main page's preset. The
 /// app talks to it only by running script; the page has no way to call the app: web messages are
 /// off, there are no host objects, and every permission is denied. Ported from <c>PageView.swift</c>
 /// and <c>AppSchemeHandler.swift</c>.
@@ -23,8 +25,14 @@ internal sealed class PageView : IDisposable
     // Audio frames the page hasn't taken yet. More than a couple means it's busy, so newer frames are dropped.
     private const int MaxFramesInFlight = 2;
 
+    // How often the pages on other displays are checked against the main page's preset.
+    private const int MirrorCheckMilliseconds = 250;
+
     private readonly HWND _parent;
     private readonly DispatcherQueue _dispatcher;
+    private readonly string _logName;
+    private readonly List<PageView> _mirrors = [];
+    private readonly DispatcherQueueTimer _mirrorTimer;
     private readonly string _root;
     private readonly string _presetsRoot;
     private readonly DispatcherQueueTimer _readyTimer;
@@ -67,12 +75,25 @@ internal sealed class PageView : IDisposable
     private string _brightnessScript = BrightnessSetting.Script(BrightnessSetting.DefaultValue);
     private string _overlayEnabledScript = OverlaySetting.Script(true);
 
+    /// <summary>Which displays the window covers, replayed the same way. Empty until the window first opens.</summary>
+    private string _layoutScript = string.Empty;
+
+    // The preset controls as last sent, and the preset the pages on other displays are held on.
+    private PresetSettings? _presetSettings;
+    private string? _mirroredPreset;
+    private bool _checkingMirrors;
+
     /// <param name="parent">The visualizer window. The page fills it.</param>
     /// <param name="dispatcher">The UI thread's queue.</param>
-    public PageView(HWND parent, DispatcherQueue dispatcher)
+    /// <param name="logName">What the page's log lines start with.</param>
+    public PageView(HWND parent, DispatcherQueue dispatcher, string logName = "page")
     {
         _parent = parent;
         _dispatcher = dispatcher;
+        _logName = logName;
+        _mirrorTimer = dispatcher.CreateTimer();
+        _mirrorTimer.Interval = TimeSpan.FromMilliseconds(MirrorCheckMilliseconds);
+        _mirrorTimer.Tick += (_, _) => SyncMirrors();
         _root = Path.Combine(AppContext.BaseDirectory, "web");
         _presetsRoot = AppPaths.PresetsFolder;
         _readyTimer = dispatcher.CreateTimer();
@@ -94,6 +115,12 @@ internal sealed class PageView : IDisposable
 
     /// <summary>Called with the preset that was on screen when the page stopped answering.</summary>
     public event Action<string>? Hung;
+
+    /// <summary>
+    /// Called after this page ended every renderer in the environment to get rid of its own stuck
+    /// one. The other pages lost theirs too and have to be made again.
+    /// </summary>
+    public event Action? RenderersEnded;
 
     /// <summary>The WebView2 environment, once it exists; null if WebView2 couldn't start. The converter page shares it.</summary>
     public Task<CoreWebView2Environment?> Environment => _environmentReady.Task;
@@ -119,13 +146,87 @@ internal sealed class PageView : IDisposable
                 return;
             }
 
-            Log.Info("page", $"WebView2 {_environment.BrowserVersionString}");
+            Log.Info(_logName, $"WebView2 {_environment.BrowserVersionString}");
             await CreateController();
         }
         catch (Exception error)
         {
-            Log.Info("page", $"Can't start the page; the visualizer stays black. Is the WebView2 runtime installed? {error.Message}");
+            Log.Info(_logName, $"Can't start the page; the visualizer stays black. Is the WebView2 runtime installed? {error.Message}");
             _environmentReady.TrySetResult(null);
+        }
+    }
+
+    /// <summary>
+    /// Adds the page of another display. It gets what this page has been sent so far, and from now
+    /// on everything this page is sent.
+    /// </summary>
+    public void AddMirror(PageView mirror)
+    {
+        mirror._nowPlayingScript = _nowPlayingScript;
+        mirror._customPresetsScript = _customPresetsScript;
+        mirror._presetSettingsScript = MirrorPresetScript ?? _presetSettingsScript;
+        mirror._audioDelayScript = _audioDelayScript;
+        mirror._brightnessScript = _brightnessScript;
+        mirror._overlayEnabledScript = _overlayEnabledScript;
+        _mirrors.Add(mirror);
+    }
+
+    public void RemoveMirror(PageView mirror) => _mirrors.Remove(mirror);
+
+    /// <summary>
+    /// Asks this page which preset is on screen and, if it changed, has the pages on other displays
+    /// blend to it. Runs a few times a second while the window is open, and when it opens.
+    /// </summary>
+    public async void SyncMirrors()
+    {
+        if (_mirrors.Count == 0 || _checkingMirrors)
+        {
+            return;
+        }
+
+        _checkingMirrors = true;
+        try
+        {
+            if (await CurrentPreset() is { } preset && preset != _mirroredPreset)
+            {
+                _mirroredPreset = preset;
+                SendMirrorPreset();
+            }
+        }
+        finally
+        {
+            _checkingMirrors = false;
+        }
+    }
+
+    /// <summary>Tells the page which displays its window covers, each time the window opens.</summary>
+    public void SendLayout(PlannedWindow place)
+    {
+        _layoutScript = place.Script;
+        Run(_layoutScript);
+    }
+
+    /// <summary>Makes the page again after another page ended this one's renderer.</summary>
+    public async void Recreate()
+    {
+        if (_disposed || _environment is null)
+        {
+            return;
+        }
+
+        try
+        {
+            // The count starts over, or this page would take its lost renderer for a stuck one.
+            if (_statusTimer.IsRunning)
+            {
+                _watchdog.Start(Now);
+            }
+
+            await ReplaceController();
+        }
+        catch (Exception error)
+        {
+            Log.Info(_logName, $"Can't make a new page: {error.Message}");
         }
     }
 
@@ -134,6 +235,10 @@ internal sealed class PageView : IDisposable
     {
         _nowPlayingScript = OverlayPayload.Script(payload);
         Run(_nowPlayingScript);
+        foreach (var mirror in _mirrors)
+        {
+            mirror.Show(payload);
+        }
     }
 
     /// <summary>Hands the bundled plugins and the custom presets folder to the page, and asks for the new preset list.</summary>
@@ -145,13 +250,20 @@ internal sealed class PageView : IDisposable
             Run(_customPresetsScript);
             FetchPresetList();
         }
+
+        foreach (var mirror in _mirrors)
+        {
+            mirror.SendCustomPresets(payload);
+        }
     }
 
     /// <summary>Hands the preset controls to the page, which applies them at once.</summary>
     public void SendPresetSettings(PresetSettings settings)
     {
+        _presetSettings = settings;
         _presetSettingsScript = settings.Script;
         Run(_presetSettingsScript);
+        SendMirrorPreset();
     }
 
     /// <summary>Tells the page how far the speakers lag behind Spotify, in seconds.</summary>
@@ -159,6 +271,10 @@ internal sealed class PageView : IDisposable
     {
         _audioDelayScript = AudioDelaySetting.Script(seconds);
         Run(_audioDelayScript);
+        foreach (var mirror in _mirrors)
+        {
+            mirror.SendAudioDelay(seconds);
+        }
     }
 
     /// <summary>Sets how much of the visualizer shows through the black dim layer, 0.5 to 1.</summary>
@@ -166,6 +282,10 @@ internal sealed class PageView : IDisposable
     {
         _brightnessScript = BrightnessSetting.Script(value);
         Run(_brightnessScript);
+        foreach (var mirror in _mirrors)
+        {
+            mirror.SendBrightness(value);
+        }
     }
 
     /// <summary>Shows or hides the Spotify overlay as a whole.</summary>
@@ -173,13 +293,28 @@ internal sealed class PageView : IDisposable
     {
         _overlayEnabledScript = OverlaySetting.Script(enabled);
         Run(_overlayEnabledScript);
+        foreach (var mirror in _mirrors)
+        {
+            mirror.SendOverlayEnabled(enabled);
+        }
     }
 
-    /// <summary>Asks the page for the next preset. It does nothing outside Shuffle.</summary>
-    public void SkipPreset() => Run(VisualizerKeys.SkipScript);
+    /// <summary>Asks the page for the next preset. It does nothing outside Shuffle. Pages on other displays follow.</summary>
+    public void SkipPreset()
+    {
+        Run(VisualizerKeys.SkipScript);
+        SyncMirrors();
+    }
 
     /// <summary>Shows the heart that confirms the like key.</summary>
-    public void ShowLike(bool liked) => Run(VisualizerKeys.LikeScript(liked));
+    public void ShowLike(bool liked)
+    {
+        Run(VisualizerKeys.LikeScript(liked));
+        foreach (var mirror in _mirrors)
+        {
+            mirror.ShowLike(liked);
+        }
+    }
 
     /// <summary>The preset on screen right now, or null if the page doesn't say. The once-a-second status can be a moment behind.</summary>
     public async Task<string?> CurrentPreset()
@@ -195,7 +330,7 @@ internal sealed class PageView : IDisposable
         }
         catch (Exception error)
         {
-            Log.Info("page", $"Asking the page for its preset failed: {error.Message}");
+            Log.Info(_logName, $"Asking the page for its preset failed: {error.Message}");
             return null;
         }
     }
@@ -203,6 +338,11 @@ internal sealed class PageView : IDisposable
     /// <summary>Hands one audio frame's script to the page. Frames are dropped, not queued, while the page is busy or loading.</summary>
     public async void SendAudioFrame(string script)
     {
+        foreach (var mirror in _mirrors)
+        {
+            mirror.SendAudioFrame(script);
+        }
+
         if (!_loaded || _controller is null || _framesInFlight >= MaxFramesInFlight)
         {
             return;
@@ -241,15 +381,27 @@ internal sealed class PageView : IDisposable
         _watchdog.Start(Now);
         _framesAtOpen = -1;
         _statusTimer.Start();
+        _mirrorTimer.Start();
+        SyncMirrors();
+        foreach (var mirror in _mirrors)
+        {
+            mirror.StartStatusChecks();
+        }
     }
 
     public void StopStatusChecks()
     {
+        foreach (var mirror in _mirrors)
+        {
+            mirror.StopStatusChecks();
+        }
+
+        _mirrorTimer.Stop();
         _statusTimer.Stop();
         _watchdog.Stop();
         if (_framesAtOpen >= 0 && _lastStatus is { } status)
         {
-            Log.Info("page", $"While open: the page drew {status.Frames - _framesAtOpen} frames and got {status.AudioFrames - _audioFramesAtOpen} audio frames");
+            Log.Info(_logName, $"While open: the page drew {status.Frames - _framesAtOpen} frames and got {status.AudioFrames - _audioFramesAtOpen} audio frames");
         }
 
         _framesAtOpen = -1;
@@ -259,7 +411,7 @@ internal sealed class PageView : IDisposable
     /// <summary>Debug builds only: makes the page's renderer loop forever, as a broken preset would.</summary>
     public void Hang()
     {
-        Log.Info("page", "Hanging the page on purpose (--hang-page)");
+        Log.Info(_logName, "Hanging the page on purpose (--hang-page)");
         Run("setTimeout(() => { for (;;) {} }, 0)");
     }
 #endif
@@ -293,6 +445,7 @@ internal sealed class PageView : IDisposable
         _disposed = true;
         _readyTimer.Stop();
         _statusTimer.Stop();
+        _mirrorTimer.Stop();
         _controller?.Close();
         _controller = null;
         _web = null;
@@ -348,20 +501,20 @@ internal sealed class PageView : IDisposable
         web.NewWindowRequested += (_, e) =>
         {
             e.Handled = true;
-            Log.Info("page", $"Blocked a new window for {e.Uri}");
+            Log.Info(_logName, $"Blocked a new window for {e.Uri}");
         };
         web.PermissionRequested += (_, e) =>
         {
             // The visuals only ever see Spotify's audio, which reaches the page from the app.
             e.State = CoreWebView2PermissionState.Deny;
-            Log.Info("page", $"Denied the permission {e.PermissionKind}");
+            Log.Info(_logName, $"Denied the permission {e.PermissionKind}");
         };
         web.DownloadStarting += (_, e) => e.Cancel = true;
         web.NavigationCompleted += (_, e) =>
         {
             if (!e.IsSuccess)
             {
-                Log.Info("page", $"The page didn't load: {e.WebErrorStatus}");
+                Log.Info(_logName, $"The page didn't load: {e.WebErrorStatus}");
                 return;
             }
 
@@ -379,7 +532,7 @@ internal sealed class PageView : IDisposable
         _controller?.CoreWebView2.Navigate(AppAddresses.PageUrl);
     }
 
-    private static bool AllowNavigation(string url, string kind)
+    private bool AllowNavigation(string url, string kind)
     {
         // A frame starts out as about:blank before it loads its own address.
         if (AppAddresses.IsAppPage(url) || (kind == "frame" && url == "about:blank"))
@@ -387,7 +540,7 @@ internal sealed class PageView : IDisposable
             return true;
         }
 
-        Log.Info("page", $"Blocked {kind} navigation to {url}");
+        Log.Info(_logName, $"Blocked {kind} navigation to {url}");
         return false;
     }
 
@@ -404,7 +557,7 @@ internal sealed class PageView : IDisposable
         if (++_readyAttempts > ReadyCheckAttempts)
         {
             _readyTimer.Stop();
-            Log.Info("page", $"The page's scripts didn't start within {ReadyCheckAttempts * ReadyCheckMilliseconds / 1000} s");
+            Log.Info(_logName, $"The page's scripts didn't start within {ReadyCheckAttempts * ReadyCheckMilliseconds / 1000} s");
             return;
         }
 
@@ -414,19 +567,22 @@ internal sealed class PageView : IDisposable
             {
                 _readyTimer.Stop();
                 _loaded = true;
-                Log.Info("page", "Ready");
+                Log.Info(_logName, "Ready");
                 Run(_customPresetsScript);
                 Run(_presetSettingsScript);
                 Run(_audioDelayScript);
                 Run(_brightnessScript);
                 Run(_overlayEnabledScript);
+                Run(_layoutScript);
                 Run(_nowPlayingScript);
                 FetchPresetList();
+                // A main page that was made again may have come up on another preset.
+                SyncMirrors();
             }
         }
         catch (Exception error)
         {
-            Log.Info("page", $"Asking the page whether it is ready failed: {error.Message}");
+            Log.Info(_logName, $"Asking the page whether it is ready failed: {error.Message}");
         }
     }
 
@@ -448,18 +604,33 @@ internal sealed class PageView : IDisposable
             }
 
             var presets = PresetInfo.List(reply);
-            Log.Info("page", $"{presets.Count} presets");
+            Log.Info(_logName, $"{presets.Count} presets");
             PresetsLoaded?.Invoke(presets);
         }
         catch (Exception error)
         {
-            Log.Info("page", $"Asking the page for its presets failed: {error.Message}");
+            Log.Info(_logName, $"Asking the page for its presets failed: {error.Message}");
+        }
+    }
+
+    // The main page's settings, held on the preset it shows. Null until that preset is known:
+    // a page on another display then shuffles by itself for a moment.
+    private string? MirrorPresetScript =>
+        _presetSettings is { } settings && _mirroredPreset is { } preset ? settings.FollowScript(preset) : null;
+
+    private void SendMirrorPreset()
+    {
+        var script = MirrorPresetScript ?? _presetSettingsScript;
+        foreach (var mirror in _mirrors)
+        {
+            mirror._presetSettingsScript = script;
+            mirror.Run(script);
         }
     }
 
     private async void Run(string script)
     {
-        if (!_loaded || _controller is null)
+        if (!_loaded || _controller is null || script.Length == 0)
         {
             return;
         }
@@ -470,13 +641,13 @@ internal sealed class PageView : IDisposable
         }
         catch (Exception error)
         {
-            Log.Info("page", $"A call to the page failed: {error.Message}");
+            Log.Info(_logName, $"A call to the page failed: {error.Message}");
         }
     }
 
     private void OnProcessFailed(CoreWebView2 sender, CoreWebView2ProcessFailedEventArgs e)
     {
-        Log.Info("page", $"WebView2 process failed: {e.ProcessFailedKind} ({e.Reason}, exit code {e.ExitCode})");
+        Log.Info(_logName, $"WebView2 process failed: {e.ProcessFailedKind} ({e.Reason}, exit code {e.ExitCode})");
         _dispatcher.TryEnqueue(async () =>
         {
             if (_disposed || !IsCurrent(sender))
@@ -497,7 +668,7 @@ internal sealed class PageView : IDisposable
                 }
                 catch (Exception error)
                 {
-                    Log.Info("page", $"Can't restart the page: {error.Message}");
+                    Log.Info(_logName, $"Can't restart the page: {error.Message}");
                 }
             }
             else if (e.ProcessFailedKind is CoreWebView2ProcessFailedKind.RenderProcessExited or CoreWebView2ProcessFailedKind.RenderProcessUnresponsive)
@@ -542,7 +713,7 @@ internal sealed class PageView : IDisposable
         if (_watchdog.ShouldReload(Now) && _environment is not null)
         {
             var preset = _lastStatus?.Preset;
-            Log.Info("page", $"The page stopped answering; replacing it (last preset: {preset ?? "none"})");
+            Log.Info(_logName, $"The page stopped answering; replacing it (last preset: {preset ?? "none"})");
             // Whatever was on screen is the likely cause. Keep it out, or the new page would hang on it too.
             // The library answers at once with a new list, which the new page gets when it is ready.
             if (preset is not null)
@@ -578,7 +749,7 @@ internal sealed class PageView : IDisposable
         _watchdog.Replied(Now);
         if (status.Preset != _lastStatus?.Preset)
         {
-            Log.Info("page", $"Preset: {status.Preset ?? "none"}");
+            Log.Info(_logName, $"Preset: {status.Preset ?? "none"}");
             if (status.Preset is { } shown)
             {
                 PresetShown?.Invoke(shown);
@@ -590,7 +761,7 @@ internal sealed class PageView : IDisposable
             var known = (_lastStatus?.Failed ?? []).Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
             foreach (var failure in status.Failed.Where(f => !known.Contains(f.Id)))
             {
-                Log.Info("page", $"Failed to load {failure.Id}: {failure.Error}");
+                Log.Info(_logName, $"Failed to load {failure.Id}: {failure.Error}");
             }
 
             FailuresChanged?.Invoke(status.Failed);
@@ -637,24 +808,33 @@ internal sealed class PageView : IDisposable
         }
         catch (Exception error)
         {
-            Log.Info("page", $"Listing the page's processes failed: {error.Message}");
+            Log.Info(_logName, $"Listing the page's processes failed: {error.Message}");
         }
 
-        Log.Info("page", $"Ended {ended} renderer process(es)");
+        Log.Info(_logName, $"Ended {ended} renderer process(es)");
+        // Before anything is awaited, so every page has let go of its old web view by the time
+        // WebView2 reports the ended renderers.
+        var replaced = ReplaceController();
+        RenderersEnded?.Invoke();
+        try
+        {
+            await replaced;
+        }
+        catch (Exception error)
+        {
+            Log.Info(_logName, $"Can't make a new page: {error.Message}");
+        }
+    }
+
+    private Task ReplaceController()
+    {
         ResetPageState();
         _readyTimer.Stop();
         var old = _controller;
         _controller = null;
         _web = null;
-        try
-        {
-            old?.Close();
-            await CreateController();
-        }
-        catch (Exception error)
-        {
-            Log.Info("page", $"Can't make a new page: {error.Message}");
-        }
+        old?.Close();
+        return CreateController();
     }
 
     private void Resize()
@@ -680,7 +860,7 @@ internal sealed class PageView : IDisposable
         catch (Exception error)
         {
             // Suspending is a saving, not a must: a page that wasn't suspended is only hidden.
-            Log.Info("page", $"Couldn't suspend the page: {error.Message}");
+            Log.Info(_logName, $"Couldn't suspend the page: {error.Message}");
         }
     }
 }

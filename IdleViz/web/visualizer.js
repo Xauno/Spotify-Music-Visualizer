@@ -4,6 +4,7 @@ import { describeError } from "./plugin-runner-core.js";
 import {
   DEFAULT_SETTINGS,
   FailureLog,
+  MAX_RENDER_WIDTH,
   Rotation,
   ShuffleBag,
   collectPresets,
@@ -12,6 +13,7 @@ import {
   parseCustomPresets,
   parsePresetSettings,
   renderSize,
+  renderWidthCap,
   shouldRender,
   shufflePool,
   skipBlendSeconds,
@@ -74,10 +76,12 @@ let lastRender = 0;
 let nextBuildAt = 0;
 let frames = 0;
 let audioFrames = 0;
+/** The widest the canvas may be. The Windows app raises it when the window spans several displays. */
+let maxRenderWidth = MAX_RENDER_WIDTH;
 
 function targetSize() {
   // The web view has no size until the window first opens; build for a common one meanwhile.
-  return renderSize(window.innerWidth || 1920, window.innerHeight || 1080, window.devicePixelRatio);
+  return renderSize(window.innerWidth || 1920, window.innerHeight || 1080, window.devicePixelRatio, maxRenderWidth);
 }
 
 /** Creates a fresh canvas and Butterchurn instance, and loads the preset it had again. */
@@ -350,6 +354,15 @@ function skipPreset() {
   if (blend !== null) showNext(blend);
 }
 
+/**
+ * Called by the Windows app with the render width cap for the displays the window covers.
+ * @param {unknown} value
+ */
+function setRenderWidthCap(value) {
+  maxRenderWidth = renderWidthCap(value);
+  resize();
+}
+
 /** Swift asks the page how it's doing with this; the page has no way to call Swift. */
 function idlevizStatus() {
   return { preset: current?.id ?? null, frames, audioFrames, presets: presets.length, failed: failures.list() };
@@ -359,7 +372,15 @@ function idlevizStatus() {
 function idlevizPresets() {
   return presets.map(({ id, name, source }) => ({ id, name, source }));
 }
-Object.assign(window, { audioFrame, idlevizPresets, idlevizStatus, setCustomPresets, setPresetSettings, skipPreset });
+Object.assign(window, {
+  audioFrame,
+  idlevizPresets,
+  idlevizStatus,
+  setCustomPresets,
+  setPresetSettings,
+  setRenderWidthCap,
+  skipPreset,
+});
 
 if (butterchurn && presets.length > 0) {
   try {

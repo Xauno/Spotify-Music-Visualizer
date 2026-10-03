@@ -64,24 +64,29 @@ public sealed class PresetSettings
     public IReadOnlyList<string> Blocked => _blocked;
 
     /// <summary>The call that hands the settings to the page.</summary>
-    public string Script
+    public string Script => ScriptFor(Mode, SinglePreset);
+
+    /// <summary>
+    /// The call for a page on another display, which shows whatever the main page shows: the same
+    /// settings, but held on that one preset. The page blends to it like to any other change.
+    /// </summary>
+    public string FollowScript(string preset) => ScriptFor(PresetMode.Single, preset);
+
+    private string ScriptFor(PresetMode mode, string single)
     {
-        get
+        // Sorted keys, as the Mac sends them. The default encoder escapes quotes, backslashes, "<" and
+        // every non-ASCII character (U+2028 and U+2029 included), so preset names can't break out.
+        var json = new JsonObject
         {
-            // Sorted keys, as the Mac sends them. The default encoder escapes quotes, backslashes, "<" and
-            // every non-ASCII character (U+2028 and U+2029 included), so preset names can't break out.
-            var json = new JsonObject
-            {
-                ["blendSeconds"] = BlendSeconds,
-                ["blocked"] = new JsonArray([.. _blocked.Select(id => (JsonNode)JsonValue.Create(id))]),
-                ["favorites"] = new JsonArray([.. _favorites.Select(id => (JsonNode)JsonValue.Create(id))]),
-                ["mode"] = Name(Mode),
-                ["secondsPerPreset"] = SecondsPerPreset,
-                ["shuffleFrom"] = Name(ShuffleFrom),
-                ["single"] = SinglePreset,
-            };
-            return $"window.setPresetSettings?.({json.ToJsonString()})";
-        }
+            ["blendSeconds"] = BlendSeconds,
+            ["blocked"] = new JsonArray([.. _blocked.Select(id => (JsonNode)JsonValue.Create(id))]),
+            ["favorites"] = new JsonArray([.. _favorites.Select(id => (JsonNode)JsonValue.Create(id))]),
+            ["mode"] = Name(mode),
+            ["secondsPerPreset"] = SecondsPerPreset,
+            ["shuffleFrom"] = Name(ShuffleFrom),
+            ["single"] = single,
+        };
+        return $"window.setPresetSettings?.({json.ToJsonString()})";
     }
 
     /// <summary>Reads the stored settings. Missing or unusable values fall back to the defaults.</summary>

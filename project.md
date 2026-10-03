@@ -495,7 +495,7 @@ Each step is one pull request. At the end of each step, update the README (Roadm
 
 ## Later
 
-- Multi-display: one window per `NSScreen`, visualizer on each (or mirrored), overlay on main only or all, and handle display changes while open (`NSApplication.didChangeScreenParametersNotification`).
+- Multi-display on the Mac: one window per `NSScreen`, visualizer on each (or mirrored), overlay on main only or all, and handle display changes while open (`NSApplication.didChangeScreenParametersNotification`). The Windows app has this already (W9 in [docs/windows.md](docs/windows.md)), with the settings and the page calls (`setRenderWidthCap`, `setOverlayRegions`) the Mac version should reuse.
 
 ## Requirements
 

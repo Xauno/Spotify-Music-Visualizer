@@ -180,6 +180,44 @@
           <Button x:Name="BlocklistButton" Click="OnBlocklistClick" />
         </controls:SettingsCard>
 
+        <TextBlock Margin="0,18,0,6" Style="{StaticResource BodyStrongTextBlockStyle}" Text="Displays" />
+
+        <!-- Shown while more than one display is switched on. -->
+        <InfoBar
+          x:Name="MultiDisplayWarning"
+          IsClosable="False"
+          IsOpen="False"
+          Severity="Warning" />
+
+        <controls:SettingsCard Header="Main display">
+          <ComboBox x:Name="MainDisplayPicker" Width="200" SelectionChanged="OnMainDisplayChanged" />
+        </controls:SettingsCard>
+
+        <controls:SettingsCard Description="Shows the visualizer on other displays too" Header="Use more than one display">
+          <ToggleSwitch x:Name="MultiDisplaySwitch" MinWidth="0" AutomationProperties.Name="Use more than one display" Toggled="OnMultiDisplayToggled" />
+        </controls:SettingsCard>
+
+        <!-- The four rows below only count while the switch above is on. -->
+        <controls:SettingsCard x:Name="OtherDisplaysCard" Header="Other displays">
+          <DropDownButton x:Name="OtherDisplaysButton" MinWidth="110" AutomationProperties.Name="Other displays">
+            <DropDownButton.Flyout>
+              <MenuFlyout x:Name="OtherDisplaysMenu" Placement="Bottom" />
+            </DropDownButton.Flyout>
+          </DropDownButton>
+        </controls:SettingsCard>
+
+        <controls:SettingsCard x:Name="PlacementCard" Header="Placement">
+          <ComboBox x:Name="PlacementPicker" Width="200" SelectionChanged="OnPlacementChanged" />
+        </controls:SettingsCard>
+
+        <controls:SettingsCard x:Name="CloseOnInputCard" Description="Off: the hotkey or the tray icon closes it" Header="Close on input">
+          <ToggleSwitch x:Name="CloseOnInputSwitch" MinWidth="0" AutomationProperties.Name="Close on input" Toggled="OnCloseOnInputToggled" />
+        </controls:SettingsCard>
+
+        <controls:SettingsCard x:Name="OverlayDisplayCard" Header="Spotify overlay on">
+          <ComboBox x:Name="OverlayDisplayPicker" Width="200" SelectionChanged="OnOverlayDisplayChanged" />
+        </controls:SettingsCard>
+
         <TextBlock Margin="0,18,0,6" Style="{StaticResource BodyStrongTextBlockStyle}" Text="Presets" />
 
         <!-- Presets carry equations that run as code, so the warning covers them as well as plugins. -->
