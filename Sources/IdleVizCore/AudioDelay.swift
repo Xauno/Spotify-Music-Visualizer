@@ -52,13 +52,21 @@ public struct DelayLine<Element> {
         if items.count > Self.capacity { items.removeFirst(items.count - Self.capacity) }
     }
 
-    /// The newest element captured at or before `time - delay`, or nil if none has come due since
-    /// the last call. Elements older than the one returned are dropped.
+    /// An element captured at or before `time - delay`, or nil if none has come due since the last
+    /// call. Normally that is one element per call, in order. When more than two are due (the delay
+    /// was shortened, or the caller fell behind), the newest of them is returned and the older ones
+    /// are dropped.
+    ///
+    /// Always returning the newest would drop frames: with a delay that is a whole number of frames
+    /// (every 50 ms is, at 60 frames a second) each frame comes due right as a call is made, and the
+    /// timer's jitter decides whether that call gets none or the next gets two. Handing a second due
+    /// element out on the next call instead costs at most one frame of extra delay.
     public mutating func pop(at time: TimeInterval, delay: TimeInterval) -> Element? {
         let due = time - delay
         guard let last = items.lastIndex(where: { $0.time <= due }) else { return nil }
-        let element = items[last].element
-        items.removeFirst(last + 1)
+        let index = last >= 2 ? last : 0
+        let element = items[index].element
+        items.removeFirst(index + 1)
         return element
     }
 

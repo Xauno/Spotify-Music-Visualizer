@@ -75,6 +75,34 @@ final class DelayLineTests: XCTestCase {
         XCTAssertEqual(line.pop(at: 2, delay: 0.5), 90)
     }
 
+    func testAnUnevenTimerDoesNotDropFrames() {
+        // 60 calls a second, each up to 2 ms early or late. A delay of a whole number of frames puts
+        // every frame right on the edge of being due.
+        let jitter = [0.0, 0.0015, -0.002, 0.0007, -0.0012, 0.002, -0.0004]
+        for delay in [0, 0.07, 0.1, 1, 2.5] {
+            var line = DelayLine<Int>()
+            var released = [Int]()
+            for tick in 0..<600 {
+                let time = Double(tick) / 60 + jitter[tick % jitter.count]
+                line.push(tick, at: time)
+                if let frame = line.pop(at: time, delay: delay) { released.append(frame) }
+            }
+            // In order, with none left out.
+            XCTAssertEqual(released, Array(0..<released.count), "for \(delay) s")
+            let expected = 600 - Int((delay * 60).rounded())
+            XCTAssertTrue((expected - 2...expected).contains(released.count), "\(released.count) frames for \(delay) s")
+        }
+    }
+
+    func testTwoDueFramesComeOutOnePerCall() {
+        var line = DelayLine<Int>()
+        line.push(1, at: 1)
+        line.push(2, at: 2)
+        XCTAssertEqual(line.pop(at: 3, delay: 0.5), 1)
+        XCTAssertEqual(line.pop(at: 3, delay: 0.5), 2)
+        XCTAssertNil(line.pop(at: 3, delay: 0.5))
+    }
+
     func testStaysBounded() {
         var line = DelayLine<Int>()
         for frame in 0..<1000 { line.push(frame, at: Double(frame)) }

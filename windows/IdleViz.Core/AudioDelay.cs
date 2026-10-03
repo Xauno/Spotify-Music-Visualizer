@@ -76,11 +76,12 @@ public sealed class DelayLine<T>
     /// older ones are dropped.
     /// </summary>
     /// <remarks>
-    /// The Mac's version always returns the newest and drops the rest. With a delay that is a whole
-    /// number of frames (every 50 ms is, at 60 frames a second) each frame then comes due right as
-    /// a call is made, and the timer's jitter decides whether that call gets none or the next gets
-    /// two: measured here, a quarter of the frames were dropped. Handing a second due element out
-    /// on the next call instead costs at most one frame of extra delay.
+    /// Always returning the newest and dropping the rest, as the Mac's version first did, loses
+    /// frames. With a delay that is a whole number of frames (every 50 ms is, at 60 frames a second)
+    /// each frame then comes due right as a call is made, and the timer's jitter decides whether
+    /// that call gets none or the next gets two: measured here, a quarter of the frames were
+    /// dropped. Handing a second due element out on the next call instead costs at most one frame
+    /// of extra delay.
     /// </remarks>
     public T? Pop(double time, double delay)
     {
